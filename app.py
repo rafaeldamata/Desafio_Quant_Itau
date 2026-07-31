@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+import altair as alt
 
 import core
 
@@ -268,6 +269,7 @@ if "resultado" in st.session_state:
             if resumo.empty:
                 st.info("Histórico insuficiente para simular nenhum período completo.")
             else:
+                
                 def fmt_rs(v):
                     return f"R$ {v:,.2f}" if v is not None else "—"
 
@@ -295,7 +297,29 @@ if "resultado" in st.session_state:
 
                 st.subheader("Drawdown ao longo do tempo (porcentagem abaixo do pico)")
                 dd_serie = core.calcular_drawdown_series(resumo,capital_inicial)
-                st.area_chart(dd_serie)
+                dd_df = dd_serie.reset_index()
+                dd_df.columns = ["data", "drawdown"]
+
+                grafico_dd = alt.Chart(dd_df).mark_area(
+                    line={"color": "#d62728"},
+                    color=alt.Gradient(
+                        gradient="linear",
+                        stops=[
+                            alt.GradientStop(color="#d62728", offset=0),
+                            alt.GradientStop(color="rgba(214,39,40,0.05)", offset=1),
+                        ],
+                        x1=1, x2=1, y1=1, y2=0,
+                    ),
+                ).encode(
+                    x=alt.X("data:T", title=None),
+                    y=alt.Y("drawdown:Q", title="Drawdown", axis=alt.Axis(format="%")),
+                    tooltip=[
+                        alt.Tooltip("data:T", title="Data"),
+                        alt.Tooltip("drawdown:Q", title="Drawdown", format=".2%"),
+                    ],
+                ).properties(height=300)
+
+                st.altair_chart(grafico_dd, use_container_width=True)
                 
                 st.subheader("Métricas de risco e retorno")
                 if metricas["beta"] is None:
