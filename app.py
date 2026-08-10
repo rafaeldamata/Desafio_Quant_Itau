@@ -1,6 +1,5 @@
 import pandas as pd
 import streamlit as st
-import altair as alt
 
 import core
 
@@ -27,6 +26,26 @@ ssa_janela = col5.selectbox(
     help="Quantos pregões olhar para trás para medir se o preço está acima ou abaixo da "
          "tendência (Singular Spectrum Analysis). Janela maior = tendência mais suave.",
 )
+
+with st.expander("Decomposição de Fourier (features espectrais)"):
+    f1, f2 = st.columns(2)
+    fourier_janela = f1.selectbox(
+        "Janela da decomposição de Fourier", core.FOURIER_JANELAS_DISPONIVEIS,
+        index=core.FOURIER_JANELAS_DISPONIVEIS.index(core.FOURIER_JANELA_PADRAO),
+        help="Quantos pregões olhar para trás para decompor a série em componentes de frequência.",
+    )
+    fourier_harmonicos = f2.selectbox(
+        "Harmônicos mantidos no filtro passa-baixa", core.FOURIER_HARMONICOS_DISPONIVEIS,
+        index=core.FOURIER_HARMONICOS_DISPONIVEIS.index(core.FOURIER_HARMONICOS_PADRAO),
+        help="Quantas componentes de menor frequência formam a tendência. Menos harmônicos = "
+             "tendência mais suave; mais harmônicos = acompanha oscilações mais curtas.",
+    )
+    st.caption(
+        "Gera duas features: **fourier_tendencia** (desvio do preço em relação à tendência "
+        "filtrada, mesma leitura do SSA mas com base espectral fixa de senos/cossenos) e "
+        "**fourier_energia_baixa** (fração da energia concentrada nas baixas frequências: "
+        "perto de 1 = movimento suave e tendencial, perto de 0 = ruidoso e serrilhado)."
+    )
 
 st.caption(
     "Todos os custos e impostos abaixo começam **zerados**. Preencha com os valores da "
@@ -82,7 +101,10 @@ if arquivo and st.button("Treinar e analisar"):
         with open(caminho, "wb") as f:
             f.write(arquivo.getbuffer())
         df = core.carregar_dados(caminho)
-        df = core.construir_features(df, horizonte=horizonte, ssa_janela=ssa_janela)
+        df = core.construir_features(
+            df, horizonte=horizonte, ssa_janela=ssa_janela,
+            fourier_janela=fourier_janela, fourier_harmonicos=fourier_harmonicos,
+        )
         dados_treino = df.dropna(subset=core.FEATURE_COLS + ["retorno_futuro"])
 
     if len(dados_treino) < 500:
@@ -262,14 +284,13 @@ if "resultado" in st.session_state:
                 comparativo = core.comparar_buy_and_hold(
                     resumo, capital_inicial=r["capital"], ibovespa=ibov, selic=selic,
                 )
-                st.session_state.backtest_resultado = (operacoes, resumo, ir_mensal, metricas, comparativo, r["capital"], benchmark_retornos,retorno_livre_risco_periodo)
+                st.session_state.backtest_resultado = (operacoes, resumo, ir_mensal, metricas, comparativo, r["capital"])
 
         if "backtest_resultado" in st.session_state:
-            operacoes, resumo, ir_mensal, metricas, comparativo, capital_inicial, benchmark_retornos, retorno_livre_risco_periodo = st.session_state.backtest_resultado
+            operacoes, resumo, ir_mensal, metricas, comparativo, capital_inicial = st.session_state.backtest_resultado
             if resumo.empty:
                 st.info("Histórico insuficiente para simular nenhum período completo.")
             else:
-                
                 def fmt_rs(v):
                     return f"R$ {v:,.2f}" if v is not None else "—"
 
@@ -285,42 +306,9 @@ if "resultado" in st.session_state:
                 m3.metric("Resultado líquido", fmt_rs(metricas["resultado_liquido"]),
                           fmt_pct(metricas["resultado_liquido"] / metricas["capital_inicial"]))
                 m4.metric("Nº de ativos negociados", metricas["numero_ativos_negociados"])
-                curva = resumo[["data_decisao", "capital_apos_periodo"]].rename(columns={"capital_apos_periodo" : "Estrategia (ML)"})
 
-                if benchmark_retornos is not None:
-                    fator_ibov = (1 + pd.Series(benchmark_retornos).fillna(0).to_numpy()).cumprod()
-                    curva["Ibovespa"] = capital_inicial * fator_ibov
-                if retorno_livre_risco_periodo is not None:
-                    fator_selic = (1 + pd.Series(retorno_livre_risco_periodo).fillna(0).to_numpy()).cumprod()
-                    curva["Selic"] = capital_inicial * fator_selic
-                st.line_chart(curva.set_index("data_decisao"))
+                st.line_chart(resumo.set_index("data_decisao")["capital_apos_periodo"])
 
-                st.subheader("Drawdown ao longo do tempo (porcentagem abaixo do pico)")
-                dd_serie = core.calcular_drawdown_series(resumo,capital_inicial)
-                dd_df = dd_serie.reset_index()
-                dd_df.columns = ["data", "drawdown"]
-
-                grafico_dd = alt.Chart(dd_df).mark_area(
-                    line={"color": "#d62728"},
-                    color=alt.Gradient(
-                        gradient="linear",
-                        stops=[
-                            alt.GradientStop(color="#d62728", offset=0),
-                            alt.GradientStop(color="rgba(214,39,40,0.05)", offset=1),
-                        ],
-                        x1=1, x2=1, y1=1, y2=0,
-                    ),
-                ).encode(
-                    x=alt.X("data:T", title=None),
-                    y=alt.Y("drawdown:Q", title="Drawdown", axis=alt.Axis(format="%")),
-                    tooltip=[
-                        alt.Tooltip("data:T", title="Data"),
-                        alt.Tooltip("drawdown:Q", title="Drawdown", format=".2%"),
-                    ],
-                ).properties(height=300)
-
-                st.altair_chart(grafico_dd, use_container_width=True)
-                
                 st.subheader("Métricas de risco e retorno")
                 if metricas["beta"] is None:
                     st.caption(

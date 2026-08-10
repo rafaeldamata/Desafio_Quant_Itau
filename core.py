@@ -20,6 +20,11 @@ MERCADO_VISTA = 10    # tipo_mercado da B3 para ações à vista
 SSA_JANELA_PADRAO = 60          # pregões olhados para trás para extrair a tendência (SSA)
 SSA_JANELAS_DISPONIVEIS = (20, 60, 126)
 
+FOURIER_JANELA_PADRAO = 60      # pregões da janela causal da decomposição de Fourier
+FOURIER_JANELAS_DISPONIVEIS = (20, 60, 126)
+FOURIER_HARMONICOS_PADRAO = 3   # nº de harmônicos de menor frequência mantidos no filtro
+FOURIER_HARMONICOS_DISPONIVEIS = (1, 2, 3, 5, 8)
+
 # Todos os parâmetros abaixo têm default 0 (custo/imposto desligado). Digite os
 # valores reais na interface do app se quiser considerá-los na simulação.
 # Referências de mercado (não são aplicadas automaticamente, é só consulta):
@@ -44,7 +49,7 @@ FEATURE_COLS = [
     "retorno_1d", "retorno_5d", "retorno_20d",
     "volatilidade_20d", "media_5_sobre_20", "media_20_sobre_60",
     "volume_rel_20d", "amplitude_dia", "rsi_14", "momentum_10d",
-    "ssa_tendencia",
+    "ssa_tendencia", "fourier_tendencia", "fourier_energia_baixa",
 ]
 
 
@@ -135,6 +140,66 @@ def _ssa_ultimo_ponto(precos: np.ndarray) -> float:
     return S[0] * U[-1, 0] * Vt[0, -1]
 
 
+def _fourier_ultimo_ponto(precos: np.ndarray, n_harmonicos: int = FOURIER_HARMONICOS_PADRAO) -> float:
+    """Valor filtrado (passa-baixa de Fourier) no último pregão da janela recebida.
+
+    Diferença conceitual para o SSA: o SSA extrai componentes cujas frequências
+    emergem dos próprios dados (base adaptativa via SVD); Fourier projeta a série
+    numa base FIXA de senos/cossenos de frequências pré-determinadas pela janela.
+    São métodos espectrais distintos, e a discordância entre os dois é informativa.
+
+    Detalhe de implementação importante: a FFT assume sinal periódico, então uma
+    janela que começa em 20 e termina em 30 é lida como se houvesse um salto
+    abrupto de 30 para 20 na "emenda" — isso gera artefato de borda (Gibbs)
+    justamente no último ponto, que é o que interessa aqui. Por isso a tendência
+    linear é removida antes da FFT e recomposta depois: sem esse passo, a feature
+    seria dominada pelo artefato em séries com tendência forte.
+
+    Trade-off assumido (verificado numericamente): esse detrend linear é a escolha
+    certa para preços de ações, que têm tendência; mas em uma oscilação pura o
+    ajuste de mínimos quadrados capta uma inclinação espúria e espalha energia
+    entre harmônicos vizinhos (numa senoide exata de 2 ciclos, ~10% da energia
+    vaza para o harmônico 1). Não existe filtro de FFT sem artefato em janela
+    finita não periódica; a alternativa (sem detrend) troca esse vazamento por um
+    artefato de borda bem pior no caso que de fato importa aqui.
+
+    Não olha nada fora da janela recebida (uso causal via `.rolling`).
+    """
+    n = len(precos)
+    t = np.arange(n)
+    coef = np.polyfit(t, precos, 1)
+    tendencia_linear = np.polyval(coef, t)
+    residuo = precos - tendencia_linear
+
+    espectro = np.fft.rfft(residuo)
+    espectro[n_harmonicos + 1:] = 0  # mantém DC + os n harmônicos de menor frequência
+    reconstruido = np.fft.irfft(espectro, n=n)
+    return float(tendencia_linear[-1] + reconstruido[-1])
+
+
+def _fourier_energia_baixa(precos: np.ndarray, n_harmonicos: int = FOURIER_HARMONICOS_PADRAO) -> float:
+    """Fração da energia espectral concentrada nas baixas frequências da janela.
+
+    Interpretação: perto de 1 = movimento dominado por poucos ciclos longos
+    (comportamento tendencial/suave); perto de 0 = energia espalhada nas altas
+    frequências (comportamento ruidoso, serrilhado). Mede o REGIME do ativo, não
+    a direção — complementa `fourier_tendencia`, que mede o desvio de preço.
+
+    Usa o mesmo detrend linear de `_fourier_ultimo_ponto` para que a tendência
+    determinística não infle artificialmente a energia de baixa frequência.
+    """
+    n = len(precos)
+    t = np.arange(n)
+    coef = np.polyfit(t, precos, 1)
+    residuo = precos - np.polyval(coef, t)
+
+    espectro = np.abs(np.fft.rfft(residuo)) ** 2
+    energia_total = espectro[1:].sum()  # ignora DC (é ~0 após detrend)
+    if energia_total <= 0:
+        return np.nan
+    return float(espectro[1:n_harmonicos + 1].sum() / energia_total)
+
+
 def _rsi(precos: pd.Series, periodo: int = 14) -> pd.Series:
     delta = precos.diff()
     ganho = delta.clip(lower=0).rolling(periodo).mean()
@@ -144,7 +209,8 @@ def _rsi(precos: pd.Series, periodo: int = 14) -> pd.Series:
 
 
 def construir_features(
-    df: pd.DataFrame, horizonte: int = HORIZONTE_PADRAO, ssa_janela: int = SSA_JANELA_PADRAO
+    df: pd.DataFrame, horizonte: int = HORIZONTE_PADRAO, ssa_janela: int = SSA_JANELA_PADRAO,
+    fourier_janela: int = FOURIER_JANELA_PADRAO, fourier_harmonicos: int = FOURIER_HARMONICOS_PADRAO,
 ) -> pd.DataFrame:
     g = df.groupby("ticker", group_keys=False)
     fechamento = g["preco_fechamento"]
@@ -168,6 +234,20 @@ def construir_features(
         lambda s: s.rolling(ssa_janela).apply(_ssa_ultimo_ponto, raw=True)
     )
     df["ssa_tendencia"] = df["preco_fechamento"] / ssa_tendencia - 1
+
+    # Fourier: preço atual sobre a tendência filtrada (passa-baixa), mesma leitura
+    # do ssa_tendencia (>0 acima da tendência), mas com base espectral fixa.
+    fourier_tendencia = g["preco_fechamento"].transform(
+        lambda s: s.rolling(fourier_janela).apply(
+            _fourier_ultimo_ponto, raw=True, args=(fourier_harmonicos,)
+        )
+    )
+    df["fourier_tendencia"] = df["preco_fechamento"] / fourier_tendencia - 1
+    df["fourier_energia_baixa"] = g["preco_fechamento"].transform(
+        lambda s: s.rolling(fourier_janela).apply(
+            _fourier_energia_baixa, raw=True, args=(fourier_harmonicos,)
+        )
+    )
 
     # alvo: retorno acumulado nos próximos `horizonte` pregões (shift negativo = futuro)
     df["retorno_futuro"] = g["preco_fechamento"].transform(
@@ -631,17 +711,6 @@ def comparar_buy_and_hold(
             }
 
     return resultado
-
-
-def calcular_drawdown_series(resumo: pd.DataFrame, capital_inicial: float) -> pd.Series:
-    curva = np.concatenate([[capital_inicial], resumo["capital_apos_periodo"].to_numpy(dtype=float)])
-    pico = np.maximum.accumulate(curva)
-    dd_pct = np.where(pico > 0, (curva - pico) / pico, np.nan)
-    datas = pd.concat([
-                        pd.Series([resumo["data_decisao"].iloc[0]]),
-                       resumo["data_decisao"],
-                       ]).reset_index(drop=True)
-    return pd.Series(dd_pct,index=datas,name="drawdown_pct")
 
 
 def calcular_metricas(
