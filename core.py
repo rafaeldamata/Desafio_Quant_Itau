@@ -713,38 +713,41 @@ def comparar_buy_and_hold(
     return resultado
 
 
-import numpy as np
-
 def calcular_drawdown_maximo_percentual(curva: np.ndarray) -> float:
     if len(curva) < 2:
         return 0.0
 
     maior_variacao_pct = 0.0  # Guardará o drawdown acumulado em decimal negativo (ex: -0.0462)
+    pico_global = curva[0]    # Maior valor já visto até o momento (running max)
 
     i = 0
     while i < len(curva) - 1:
+        # Atualiza o pico global sempre que a curva sobe acima do máximo anterior
+        if curva[i] > pico_global:
+            pico_global = curva[i]
+
         # Verifica se começou uma perna de baixa
         if curva[i + 1] < curva[i]:
-            pico_local = curva[i]   # Captura o pico onde a queda começou
-            vale = curva[i + 1]     # Captura o 1º dia de queda como o vale inicial
-            
+            vale = curva[i + 1]  # Captura o 1º dia de queda como o vale inicial
             i = i + 1
-            
             # Enquanto continuar caindo nos dias seguintes...
             while i < len(curva) - 1 and curva[i + 1] < curva[i]:
                 i = i + 1
-                vale = curva[i]     # Atualiza o vale apenas se o próximo dia for de queda
-            
-            # Calcula a variação percentual do pico até o fundo
-            var_pct = (vale - pico_local) / pico_local
-            
+                vale = curva[i]  # Atualiza o vale apenas se o próximo dia for de queda
+
+            # Calcula a variação percentual do PICO GLOBAL até o fundo
+            var_pct = (vale - pico_global) / pico_global
             if var_pct < maior_variacao_pct:
                 maior_variacao_pct = var_pct
         else:
             i = i + 1
 
+    # Garante que o último ponto também seja considerado no pico global
+    if curva[-1] > pico_global:
+        pico_global = curva[-1]
+
     # Retorna o valor percentual positivo (ex: 4.62 para 4.62%)
-    return -maior_variacao_pct * 100
+    return -maior_variacao_pct
 
 
 def calcular_drawdown_maximo(curva: np.ndarray):

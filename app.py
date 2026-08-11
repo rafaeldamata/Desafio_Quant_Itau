@@ -331,7 +331,7 @@ if "resultado" in st.session_state:
                     ("Sortino", fmt_num(metricas["sortino"])),
                     ("Calmar", fmt_num(metricas["calmar"])),
                     ("Beta", fmt_num(metricas["beta"])),
-                    ("Alfa de Jensen (anualizado)", fmt_pct(metricas["alfa_jensen_anualizado"])),
+                    ("Alfa de Jensen", fmt_pct(metricas["alfa_jensen"])),
                     ("Drawdown absoluto", fmt_rs(metricas["drawdown_absoluto_rs"])),
                     ("Drawdown máximo", fmt_rs(metricas["drawdown_maximo_rs"])),
                     ("Drawdown relativo", fmt_pct(metricas["drawdown_relativo_pct"])),
