@@ -125,8 +125,6 @@ if arquivo and st.button("Treinar e analisar"):
         )
         core.registrar_decisoes(carteira, horizonte=int(horizonte))
 
-    # Guarda tudo em session_state: botões dentro das abas (ex: "Rodar backtest")
-    # disparam um rerun do script, e sem isso o resultado do treino se perderia.
     st.session_state.resultado = dict(
         df=df, validacao=validacao, ranking=ranking, carteira=carteira,
         treino_de=pd.Timestamp(dados_treino["data_pregao"].min()).date(),
@@ -284,10 +282,19 @@ if "resultado" in st.session_state:
                 comparativo = core.comparar_buy_and_hold(
                     resumo, capital_inicial=r["capital"], ibovespa=ibov, selic=selic,
                 )
-                st.session_state.backtest_resultado = (operacoes, resumo, ir_mensal, metricas, comparativo, r["capital"])
+                # Correção: passando retorno_livre_risco_periodo em vez de retorno_livre_risco
+                st.session_state.backtest_resultado = (
+                    operacoes, resumo, ir_mensal, metricas, comparativo, 
+                    r["capital"], benchmark_retornos, retorno_livre_risco_periodo
+                )
 
         if "backtest_resultado" in st.session_state:
-            operacoes, resumo, ir_mensal, metricas, comparativo, capital_inicial = st.session_state.backtest_resultado
+            # Correção: desempacotando retorno_livre_risco_periodo corretamente
+            (
+                operacoes, resumo, ir_mensal, metricas, comparativo, 
+                capital_inicial, benchmark_retornos, retorno_livre_risco_periodo
+            ) = st.session_state.backtest_resultado
+
             if resumo.empty:
                 st.info("Histórico insuficiente para simular nenhum período completo.")
             else:
@@ -307,7 +314,15 @@ if "resultado" in st.session_state:
                           fmt_pct(metricas["resultado_liquido"] / metricas["capital_inicial"]))
                 m4.metric("Nº de ativos negociados", metricas["numero_ativos_negociados"])
 
-                st.line_chart(resumo.set_index("data_decisao")["capital_apos_periodo"])
+                curva = resumo[["data_decisao", "capital_apos_periodo"]].rename(columns={"capital_apos_periodo" : "Estrategia (ML)"})
+
+                if benchmark_retornos is not None:
+                    fator_ibov = (1 + pd.Series(benchmark_retornos).fillna(0).to_numpy()).cumprod()
+                    curva["Ibovespa"] = capital_inicial * fator_ibov
+                if retorno_livre_risco_periodo is not None:
+                    fator_selic = (1 + pd.Series(retorno_livre_risco_periodo).fillna(0).to_numpy()).cumprod()
+                    curva["Selic"] = capital_inicial * fator_selic
+                st.line_chart(curva.set_index("data_decisao"))
 
                 st.subheader("Métricas de risco e retorno")
                 if metricas["beta"] is None:
