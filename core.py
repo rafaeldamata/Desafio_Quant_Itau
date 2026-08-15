@@ -713,98 +713,21 @@ def comparar_buy_and_hold(
     return resultado
 
 
-def calcular_drawdown_maximo_percentual(curva: np.ndarray) -> float:
+def calcular_drawdown_percentual(curva: np.ndarray) -> float:
     if len(curva) < 2:
         return 0.0
 
-    maior_variacao_pct = 0.0  # Guardará o drawdown acumulado em decimal negativo (ex: -0.0462)
-    pico_global = curva[0]    # Maior valor já visto até o momento (running max)
-
-    i = 0
-    while i < len(curva) - 1:
-        # Atualiza o pico global sempre que a curva sobe acima do máximo anterior
-        if curva[i] > pico_global:
-            pico_global = curva[i]
-
-        # Verifica se começou uma perna de baixa
-        if curva[i + 1] < curva[i]:
-            vale = curva[i + 1]  # Captura o 1º dia de queda como o vale inicial
-            i = i + 1
-            # Enquanto continuar caindo nos dias seguintes...
-            while i < len(curva) - 1 and curva[i + 1] < curva[i]:
-                i = i + 1
-                vale = curva[i]  # Atualiza o vale apenas se o próximo dia for de queda
-
-            # Calcula a variação percentual do PICO GLOBAL até o fundo
-            var_pct = (vale - pico_global) / pico_global
-            if var_pct < maior_variacao_pct:
-                maior_variacao_pct = var_pct
-        else:
-            i = i + 1
-
-    # Garante que o último ponto também seja considerado no pico global
-    if curva[-1] > pico_global:
-        pico_global = curva[-1]
-
-    # Retorna o valor percentual positivo (ex: 4.62 para 4.62%)
-    return -maior_variacao_pct
-
-
-def calcular_drawdown_maximo(curva: np.ndarray):
-    if len(curva) < 2:
-        return 0.0
-
-    atual = curva[1]
-    ant = curva[0]
-    maior_variacao = 0
-
-    i = 1
-    while i < len(curva):
-        taxa_variacao = atual - ant
-        if taxa_variacao < 0:
-            if taxa_variacao < maior_variacao:
-                maior_variacao = taxa_variacao
-                i = i + 1
-                if i < len(curva):
-                    ant = atual
-                    atual = curva[i]
-
-                # Adicionada a verificação (i < len(curva)) ANTES de acessar curva[i]
-                while i < len(curva) and (atual - ant) < 0:
-                    taxa_variacao = taxa_variacao + (atual - ant)
-                    maior_variacao = taxa_variacao
-                    i = i + 1
-                    if i < len(curva):
-                        ant = atual
-                        atual = curva[i]
-            else:
-                # Isola a nova sequência de quedas para não misturar com o 'taxa_variacao' antigo
-                acumulado_temp = taxa_variacao
-
-                i = i + 1
-                if i < len(curva):
-                    ant = atual
-                    atual = curva[i]
-
-                    # Enquanto continuar caindo nos dias seguintes...
-                    while i < len(curva) and (atual - ant) < 0:
-                        acumulado_temp = acumulado_temp + (atual - ant)
-                        if acumulado_temp < maior_variacao:
-                            maior_variacao = acumulado_temp
-                        i = i + 1
-                        if i < len(curva):
-                            ant = atual
-                            atual = curva[i]
-        else:
-            i = i + 1
-            if i < len(curva):
-                ant = atual
-                atual = curva[i]
-
-    return -(maior_variacao)
-            
-
-
+    variacao = 0
+    drawdown = []
+    pico_local = curva[0]
+    for i in range(1,len(curva) - 1):
+        if curva[i - 1] < curva[i] and curva[i + 1] < curva[i]:
+            pico_local = curva[i]
+        variacao = (curva[i] - pico_local) / pico_local
+        drawdown.append(variacao)
+    return min(drawdown) 
+    
+    
 
 
 def calcular_metricas(
@@ -853,14 +776,14 @@ def calcular_metricas(
     dd_serie = curva - pico
     idx_min = int(np.argmin(dd_serie))
     drawdown_maximo_rs = float(-dd_serie[idx_min])
-    drawdown_maximo_rs = calcular_drawdown_maximo(curva)
+   # drawdown_maximo_rs = calcular_drawdown_maximo(curva)
     pico_no_ponto = float(pico[idx_min])
-    drawdown_relativo_pct = drawdown_maximo_rs / pico_no_ponto if pico_no_ponto > 0 else np.nan
-    drawdown_relativo_pct = calcular_drawdown_maximo_percentual(curva)
-    drawdown_absoluto_rs = float(max(0.0, capital_inicial - curva.min()))
-
-    capital_inicio_periodo = curva[:-1]
-    retornos_periodo = resumo["lucro_periodo"].to_numpy(dtype=float) / capital_inicio_periodo
+    # drawdown_relativo_pct = drawdown_maximo_rs / pico_no_ponto if pico_no_ponto > 0 else np.nan
+    drawdown_relativo_pct = calcular_drawdown_percentual(curva)
+    drawdown_absoluto_rs = capital_inicial - curva.min()
+    #retornos_periodo = resumo["lucro_periodo"].to_numpy(dtype=float) / capital_inicial
+    retornos_periodo = curva[1:] / curva[:-1] - 1
+    #retornos_periodo = resumo["lucro_periodo"].to_numpy(dtype=float) / capital_inicial
     periodos_por_ano = 252 / horizonte if horizonte > 0 else np.nan
     rf_escalar = (1 + risco_livre_anual) ** (1 / periodos_por_ano) - 1 if periodos_por_ano > 0 else 0.0
     if retorno_livre_risco_periodo is not None and len(retorno_livre_risco_periodo) == len(retornos_periodo):
@@ -870,12 +793,14 @@ def calcular_metricas(
         rf_periodo = np.full(len(retornos_periodo), rf_escalar)
 
     excesso = retornos_periodo - rf_periodo
-    desvio = excesso.std(ddof=1) if len(excesso) > 1 else np.nan
-    sharpe = excesso.mean() / desvio if desvio and desvio > 0 else np.nan
-
+    desvio = retornos_periodo.std(ddof=1) if len(retornos_periodo) > 1 else np.nan
+    sharpe = excesso.mean() / desvio * np.sqrt(periodos_por_ano) if desvio and desvio > 0 else np.nan
+    
+    #retorno_selic = retorno_livre_risco_periodo["resultado_liquido"] / capital_inicial
+    #sharpe = (retorno_estrategia - retorno_selic) / desvio
     downside = np.clip(excesso, a_min=None, a_max=0)
     downside_dev = np.sqrt(np.mean(downside ** 2)) if len(downside) > 0 else np.nan
-    sortino = excesso.mean() / downside_dev  if downside_dev and downside_dev > 0 else np.nan
+    sortino = excesso.mean() / downside_dev * np.sqrt(periodos_por_ano) if downside_dev and downside_dev > 0 else np.nan
 
     data_inicio_bt, data_fim_bt = _intervalo_datas(resumo)
     anos = max((data_fim_bt - data_inicio_bt).days / 365.25, horizonte / 252)
@@ -898,7 +823,7 @@ def calcular_metricas(
                 covariancia = np.cov((retornos_periodo[valido] - rf_periodo[valido]), (bench[valido] - rf_periodo[valido]), ddof=1)[0, 1]
                 beta = covariancia / variancia_bench
                 alfa_por_periodo = (retornos_periodo[valido] - rf_periodo[valido]) - beta * (bench[valido] - rf_periodo[valido])
-                alfa_jensen = alfa_por_periodo.mean()
+                alfa_jensen = (1 + alfa_por_periodo.mean()) ** periodos_por_ano - 1
 
     def _ou_none(x: float) -> float | None:
         return None if x is None or (isinstance(x, float) and np.isnan(x)) else round(float(x), 4)

@@ -1,6 +1,6 @@
 import pandas as pd
 import streamlit as st
-
+import numpy as np
 import core
 
 st.set_page_config(page_title="Análise B3 (ML)", layout="wide")
@@ -313,9 +313,10 @@ if "resultado" in st.session_state:
                 m3.metric("Resultado líquido", fmt_rs(metricas["resultado_liquido"]),
                           fmt_pct(metricas["resultado_liquido"] / metricas["capital_inicial"]))
                 m4.metric("Nº de ativos negociados", metricas["numero_ativos_negociados"])
-
+                
+                
                 curva = resumo[["data_decisao", "capital_apos_periodo"]].rename(columns={"capital_apos_periodo" : "Estrategia (ML)"})
-
+                
                 if benchmark_retornos is not None:
                     fator_ibov = (1 + pd.Series(benchmark_retornos).fillna(0).to_numpy()).cumprod()
                     curva["Ibovespa"] = capital_inicial * fator_ibov
