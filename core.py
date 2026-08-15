@@ -717,15 +717,22 @@ def calcular_drawdown_percentual(curva: np.ndarray) -> float:
     if len(curva) < 2:
         return 0.0
 
-    variacao = 0
+    n = len(curva)
     drawdown = []
     pico_local = curva[0]
-    for i in range(1,len(curva) - 1):
-        if curva[i - 1] < curva[i] and curva[i + 1] < curva[i]:
+
+    for i in range(n):
+        # nas bordas não há vizinho de um dos lados, então considera "ok" por padrão
+        esquerda_ok = (i == 0) or (curva[i - 1] <= curva[i])
+        direita_ok = (i == n - 1) or (curva[i + 1] <= curva[i])
+
+        if esquerda_ok and direita_ok and curva[i] >= pico_local:
             pico_local = curva[i]
+
         variacao = (curva[i] - pico_local) / pico_local
         drawdown.append(variacao)
-    return min(drawdown) 
+
+    return -(min(drawdown))
     
     
 
@@ -800,7 +807,7 @@ def calcular_metricas(
     #sharpe = (retorno_estrategia - retorno_selic) / desvio
     downside = np.clip(excesso, a_min=None, a_max=0)
     downside_dev = np.sqrt(np.mean(downside ** 2)) if len(downside) > 0 else np.nan
-    sortino = excesso.mean() / downside_dev * np.sqrt(periodos_por_ano) if downside_dev and downside_dev > 0 else np.nan
+    sortino = excesso.mean() / downside_dev if downside_dev and downside_dev > 0 else np.nan
 
     data_inicio_bt, data_fim_bt = _intervalo_datas(resumo)
     anos = max((data_fim_bt - data_inicio_bt).days / 365.25, horizonte / 252)

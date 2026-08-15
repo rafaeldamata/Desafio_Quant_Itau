@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 import numpy as np
 import core
+import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Análise B3 (ML)", layout="wide")
 st.title("Análise de carteira B3 com machine learning")
@@ -324,6 +325,28 @@ if "resultado" in st.session_state:
                     fator_selic = (1 + pd.Series(retorno_livre_risco_periodo).fillna(0).to_numpy()).cumprod()
                     curva["Selic"] = capital_inicial * fator_selic
                 st.line_chart(curva.set_index("data_decisao"))
+
+                fig, ax = plt.subplots(figsize=(12, 6))
+
+                curva_plot = curva.set_index("data_decisao")
+
+                ax.plot(curva_plot.index, curva_plot["Estrategia (ML)"], color='blue', linewidth=2, label='Estratégia (ML)')
+
+                if "Selic" in curva_plot.columns:
+                    ax.plot(curva_plot.index, curva_plot["Selic"], color='pink', linewidth=2, label='Selic')
+
+                if "Ibovespa" in curva_plot.columns:
+                    ax.plot(curva_plot.index, curva_plot["Ibovespa"], color='gold', linestyle='--', linewidth=2, label='Ibovespa')
+
+                ax.set_xlabel('Data')
+                ax.set_ylabel('Capital (R$)')
+                ax.set_title('Backtest: Estratégia vs Selic vs Ibovespa')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+                plt.xticks(rotation=45)
+                plt.tight_layout()
+                st.pyplot(fig)
 
                 st.subheader("Métricas de risco e retorno")
                 if metricas["beta"] is None:
